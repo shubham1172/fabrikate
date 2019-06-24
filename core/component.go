@@ -286,11 +286,11 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 	}
 
 	// Enqueue the given component
-	enqueue := func(component Component) {
+	enqueue := func(component *Component) {
 		// Increment working counter; MUST happen BEFORE sending to queue or race condition can occur
 		walking.Add(1)
 		log.Debugf("Adding subcomponent '%s' to queue with physical path '%s' and logical path '%s'\n", component.Name, component.PhysicalPath, component.LogicalPath)
-		queue <- component
+		queue <- *component
 	}
 
 	// Mark a component as visited and report it back as a result; decrements the walking counter
@@ -301,12 +301,13 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 
 	// Main worker thread to enqueue root node, wait, and close the channel once all nodes visited
 	go func() {
-		// Manually enqueue the first root component
-		enqueue(prepareComponent(Component{
+		rootComponent := prepareComponent(Component{
 			PhysicalPath: startingPath,
 			LogicalPath:  "./",
 			Config:       NewComponentConfig(startingPath),
-		}))
+		})
+		// Manually enqueue the first root component
+		enqueue(&rootComponent)
 
 		// Close results channel once all nodes visited
 		walking.Wait()
@@ -316,12 +317,12 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 	// Worker thread to pull from queue and call the iterator
 	go func() {
 		for component := range queue {
-			go func(component Component) {
+			go func(component *Component) {
 				// Decrement working counter; Must happen AFTER the subcomponents are enqueued
-				defer markAsVisited(&component)
+				defer markAsVisited(component)
 
 				// Call the iterator
-				results <- WalkResult{Error: iterator(component.PhysicalPath, &component)}
+				results <- WalkResult{Error: iterator(component.PhysicalPath, component)}
 
 				// Range over subcomponents; preparing and enqueuing
 				for _, subcomponent := range component.Subcomponents {
@@ -355,9 +356,9 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 					}
 
 					log.Debugf("Adding subcomponent '%s' to queue with physical path '%s' and logical path '%s'\n", subcomponent.Name, subcomponent.PhysicalPath, subcomponent.LogicalPath)
-					enqueue(subcomponent)
+					enqueue(&subcomponent)
 				}
-			}(component)
+			}(&component)
 		}
 	}()
 
