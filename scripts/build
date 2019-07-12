@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 if [ $# -lt 1 ]; then
   echo "$0: takes at least one argument: 'get-deps', 'clean', 'build fab' or 'build release <version_number>'"
@@ -63,10 +63,12 @@ if [ $1 == "build" ]; then
     echo "Building for Mac"
     GOOS=darwin GOARCH=amd64 go build -o fab
     zip releases/$3/fab-v$3-darwin-amd64.zip fab
+    tar -czvf releases/$3/fab-v$3-darwin-amd64.tar.gz fab
 
     echo "Building for Linux"
     GOOS=linux GOARCH=amd64 go build -o fab
     zip releases/$3/fab-v$3-linux-amd64.zip fab
+    tar -czvf releases/$3/fab-v$3-linux-amd64.tar.gz fab
 
     echo "Release zip files can be found in releases/$3"
   fi
