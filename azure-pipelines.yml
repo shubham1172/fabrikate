@@ -49,3 +49,5 @@ steps:
       go test -v -race ./...
     workingDirectory: "$(modulePath)"
     displayName: "Test"
+    env:
+      personal_access_token: $(personal_access_token)
