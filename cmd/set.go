@@ -132,7 +132,9 @@ func Set(environment string, subcomponent string, pathValuePairStrings []string,
 			}
 		}
 
-		componentConfig.SetConfig(subcomponentPath, pathValue.Path, pathValue.Value)
+		if err = componentConfig.SetConfig(subcomponentPath, pathValue.Path, pathValue.Value); err != nil {
+			return err
+		}
 	}
 
 	return componentConfig.Write(environment)

@@ -1,0 +1,11 @@
+subcomponents:
+  a:
+    config:
+      foo: foo
+      x:
+        "y": {}
+  b:
+    config:
+      foo:
+        bar: baz
+      xyz: abc

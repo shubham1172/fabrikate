@@ -1,4 +1,6 @@
 config:
+  a:
+    b: foobar
   fod: rad
   foo: faa
 subcomponents:

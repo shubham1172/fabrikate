@@ -101,16 +101,26 @@ func (cc *ComponentConfig) HasComponentConfig(path []string) bool {
 
 // SetComponentConfig sets the `value` of the given configuration setting.
 // The configuration setting is indicated via a configuration `path`.
-func (cc *ComponentConfig) SetComponentConfig(path []string, value string) {
+// If any of the map keys specified within the path lead to non maps (besides
+// the last one), it will overwrite the value with an empty map.
+func (cc *ComponentConfig) SetComponentConfig(path []string, value string) (err error) {
 	configLevel := cc.Config
 	createdNewConfig := false
 
 	for levelIndex, pathPart := range path {
 		// if this key is not the final one, we need to decend in the config.
 		if levelIndex < len(path)-1 {
+			// If key does not exist, create an empty map
 			if _, ok := configLevel[pathPart]; !ok {
 				createdNewConfig = true
 				configLevel[pathPart] = map[string]interface{}{}
+			}
+
+			// If the key leads to a non-map value, return an error
+			if _, isAMap := configLevel[pathPart].(map[string]interface{}); !isAMap {
+				currentPath := strings.Join(path[:levelIndex+1], ".")
+				fullPath := strings.Join(path, ".")
+				return fmt.Errorf("Config path '%s' points to a non-map value; cannot set '%s' to '%s'", currentPath, fullPath, value)
 			}
 
 			configLevel = configLevel[pathPart].(map[string]interface{})
@@ -121,6 +131,46 @@ func (cc *ComponentConfig) SetComponentConfig(path []string, value string) {
 			configLevel[pathPart] = value
 		}
 	}
+
+	return err
+}
+
+// UnsetComponentConfig unsets a key from a component config (deleteing the key
+// from the map). If any of the keys provided in `keyPath` are not found, this
+// is treated as a noop.
+func (cc *ComponentConfig) UnsetComponentConfig(keyPath []string) (err error) {
+	configLevel := cc.Config
+
+	// iterate down the config tree until reaching the second to last level; so we can delete the last
+	for pathIndex, key := range keyPath[:len(keyPath)-1] {
+		// Return an error if any keys don't exist
+		if _, exists := configLevel[key]; !exists {
+			currentKeyPath := strings.Join(keyPath[:pathIndex+1], ".")
+			targetKeyPath := strings.Join(keyPath, ".")
+			return fmt.Errorf("Config key path '%s' not found. Unable to remove config entry '%s'", currentKeyPath, targetKeyPath)
+		}
+
+		// Return early/gracefully if keys specify non-maps
+		ok := true
+		configLevel, ok = configLevel[key].(map[string]interface{})
+		if !ok {
+			currentKeyPath := strings.Join(keyPath[:pathIndex+1], ".")
+			targetKeyPath := strings.Join(keyPath, ".")
+			return fmt.Errorf("Config key path '%s' points to a non-map entry. Unable to remove config entry '%s'", currentKeyPath, targetKeyPath)
+		}
+	}
+
+	// Check to see if the last key exists; if so delete, else return an error
+	lastKey := keyPath[len(keyPath)-1]
+	if _, exists := configLevel[lastKey]; exists {
+		// Remove the last key
+		delete(configLevel, keyPath[len(keyPath)-1])
+	} else {
+		targetKeyPath := strings.Join(keyPath, ".")
+		return fmt.Errorf("Target key '%s' does not exist in config; unable to remove key '%s'", lastKey, targetKeyPath)
+	}
+
+	return err
 }
 
 // GetSubcomponentConfig returns the subcomponent config of the given component.
@@ -167,9 +217,17 @@ func (cc *ComponentConfig) HasSubcomponentConfig(subcomponentPath []string) bool
 }
 
 // SetConfig sets or creates the configuration `value` for the given `subcomponentPath`.
-func (cc *ComponentConfig) SetConfig(subcomponentPath []string, path []string, value string) {
+func (cc *ComponentConfig) SetConfig(subcomponentPath []string, path []string, value string) (err error) {
 	subcomponentConfig := cc.GetSubcomponentConfig(subcomponentPath)
-	subcomponentConfig.SetComponentConfig(path, value)
+	err = subcomponentConfig.SetComponentConfig(path, value)
+
+	return err
+}
+
+// UnsetConfig removes a key from a the target subcomponent config
+func (cc *ComponentConfig) UnsetConfig(subcomponentPath []string, path []string) error {
+	subcomponentConfig := cc.GetSubcomponentConfig(subcomponentPath)
+	return subcomponentConfig.UnsetComponentConfig(path)
 }
 
 // MergeNamespaces merges the namespaces between the componentConfig passed and this

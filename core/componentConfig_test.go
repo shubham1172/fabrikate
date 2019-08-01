@@ -56,19 +56,23 @@ func TestSet(t *testing.T) {
 	assert.Nil(t, err)
 
 	// can override a config value successfully
-	config.SetConfig([]string{}, []string{"foo"}, "fee")
+	err = config.SetConfig([]string{}, []string{"foo"}, "fee")
+	assert.Nil(t, err)
 	assert.Equal(t, "fee", config.Config["foo"])
 
 	// can create a value successfully
-	config.SetConfig([]string{}, []string{"new"}, "value")
+	err = config.SetConfig([]string{}, []string{"new"}, "value")
+	assert.Nil(t, err)
 	assert.Equal(t, "value", config.Config["new"])
 
 	// can override a subcomponent value successfully
-	config.SetConfig([]string{"myapp"}, []string{"zoo"}, "zee")
+	err = config.SetConfig([]string{"myapp"}, []string{"zoo"}, "zee")
+	assert.Nil(t, err)
 	assert.Equal(t, "zee", config.Subcomponents["myapp"].Config["zoo"])
 
 	// can create a new deeper subcomponent config level successfully
-	config.SetConfig([]string{"myapp"}, []string{"data", "storageClass"}, "fast")
+	err = config.SetConfig([]string{"myapp"}, []string{"data", "storageClass"}, "fast")
+	assert.Nil(t, err)
 	dataMap := config.Subcomponents["myapp"].Config["data"].(map[string]interface{})
 	assert.Equal(t, "fast", dataMap["storageClass"])
 }

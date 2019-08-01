@@ -68,6 +68,12 @@ func TestSetValue(t *testing.T) {
 	err = Set("test", "", []string{"newfoo=faa"}, noNewConfigKeys, "")
 	assert.NotNil(t, err)
 
+	// Setting value where one of the keys is a non-map should return an error
+	err = Set("test", "", []string{"a.b=foobar"}, false, "")
+	assert.Nil(t, err)
+	err = Set("test", "", []string{"a.b.c=foobar"}, false, "")
+	assert.NotNil(t, err)
+
 	////////////////////////////////////////////////////////////////////////////////
 	// Start Set from yaml file
 	////////////////////////////////////////////////////////////////////////////////
