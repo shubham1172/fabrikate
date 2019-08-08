@@ -33,8 +33,7 @@ func Remove(subcomponent core.Component) (err error) {
 		}
 	}
 
-	err = component.RemoveSubcomponent(subcomponent)
-	if err != nil {
+	if err = component.RemoveSubcomponent(subcomponent); err != nil {
 		return err
 	}
 

@@ -150,7 +150,7 @@ func (cc *ComponentConfig) UnsetComponentConfig(keyPath []string) (err error) {
 			return fmt.Errorf("Config key path '%s' not found. Unable to remove config entry '%s'", currentKeyPath, targetKeyPath)
 		}
 
-		// Return early/gracefully if keys specify non-maps
+		// Return an if any keys in key path specify non-maps
 		ok := true
 		configLevel, ok = configLevel[key].(map[string]interface{})
 		if !ok {
@@ -193,6 +193,38 @@ func (cc *ComponentConfig) GetSubcomponentConfig(subcomponentPath []string) (sub
 	}
 
 	return subcomponentConfig
+}
+
+// RemoveComponentConfig removes the subcomponent specified in subcomponentPath.
+// Going down the component config tree start at cc until reaching the final
+// component. Returns an error if any component in the path is not found.
+func (cc *ComponentConfig) RemoveComponentConfig(subcomponentPath []string) (err error) {
+	subcomponentConfig := *cc
+
+	// Iterate through config tree until subcomponentConfig == second to last component
+	for componentIndex, subcomponentName := range subcomponentPath[:len(subcomponentPath)] {
+		// Return an error if the subcomponent does not exist
+		if _, ok := subcomponentConfig.Subcomponents[subcomponentName]; !ok {
+			currentComponentPath := subcomponentPath[:componentIndex+1]
+			targetComponentPath := strings.Join(subcomponentPath, ".")
+			return fmt.Errorf("Component configuration for '%s' not found in config path '%s'; unable to delete component configuration '%s'", subcomponentName, currentComponentPath, targetComponentPath)
+		}
+
+		subcomponentConfig = subcomponentConfig.Subcomponents[subcomponentName]
+	}
+
+	// If second to last config doesn't contain target component config, return error
+	lastComponentName := subcomponentPath[len(subcomponentPath)+1]
+	if _, ok := subcomponentConfig.Subcomponents[lastComponentName]; !ok {
+		currentComponentPath := subcomponentPath[:len(subcomponentPath)]
+		targetComponentPath := strings.Join(subcomponentPath, ".")
+		return fmt.Errorf("Component configuration for '%s' not found in config path '%s'; unable to delete component configuration '%s'", lastComponentName, currentComponentPath, targetComponentPath)
+	}
+
+	// Delete the target component config
+	delete(subcomponentConfig.Subcomponents, lastComponentName)
+
+	return err
 }
 
 // HasSubcomponentConfig checks if a component contains the given subcomponents of the `subcomponentPath`

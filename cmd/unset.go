@@ -4,11 +4,13 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/kyokomi/emoji"
 	"github.com/microsoft/fabrikate/core"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
-func unset(keys []string, environment, subcomponent string) (err error) {
+func unset(keys []string, environment, subcomponent string, removeSubcomponent bool) (err error) {
 	// Load config
 	componentConfig := core.NewComponentConfig(".")
 
@@ -30,10 +32,18 @@ func unset(keys []string, environment, subcomponent string) (err error) {
 		return err
 	}
 
-	// Remove all keys form the config
-	for _, keyPath := range keyPaths {
-		if err = componentConfig.UnsetConfig(subcomponentPath, keyPath); err != nil {
+	// Remove the entire target component config if specified
+	if removeSubcomponent {
+		log.Info(emoji.Sprintf(""))
+		if err = componentConfig.RemoveComponentConfig(subcomponentPath); err != nil {
 			return err
+		}
+	} else {
+		// Remove all keys from the config
+		for _, keyPath := range keyPaths {
+			if err = componentConfig.UnsetConfig(subcomponentPath, keyPath); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -42,8 +52,9 @@ func unset(keys []string, environment, subcomponent string) (err error) {
 }
 
 type unsetCmdOpts struct {
-	subcomponent string
-	environment  string
+	subcomponent       string
+	environment        string
+	removeSubcomponent bool
 }
 
 func newUnsetCmd() *cobra.Command {
@@ -71,12 +82,14 @@ Unsets the subkey "replicas" in the key 'data' in the 'common' config (the defau
 				return errors.New("'unset' takes a config path as the first parameter and one or more keys to remove thereafter")
 			}
 
-			return unset(args, opts.environment, opts.subcomponent)
+			removeComponent := cmd.Flag("remove-component").Value.String() == "true"
+			return unset(args, opts.environment, opts.subcomponent, removeComponent)
 		},
 	}
 
-	cmd.PersistentFlags().StringVar(&opts.environment, "environment", "common", "Environment this configuration should apply to")
-	cmd.PersistentFlags().StringVar(&opts.subcomponent, "subcomponent", "", "Subcomponent this configuration should apply to")
+	cmd.PersistentFlags().StringVar(&opts.environment, "environment", "common", "Environment this configuration should be removed from")
+	cmd.PersistentFlags().StringVar(&opts.subcomponent, "subcomponent", "", "Subcomponent this configuration should be removed from")
+	cmd.PersistentFlags().Bool("remove-component", false, "Remove the component config specified in --subcomponent entirely")
 
 	return cmd
 }
