@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/kyokomi/emoji"
-	log "github.com/sirupsen/logrus"
+	"github.com/microsoft/fabrikate/logger"
 	"github.com/timfpark/yaml"
 )
 
@@ -41,6 +41,16 @@ type Component struct {
 	Manifest string `yaml:"-" json:"-"`
 }
 
+// supportedTypes returns a list of valid ComponentType for a Component
+func supportedTypes() []string {
+	return []string{"component", "helm", "static"}
+}
+
+// supportedMethods returns a list of valid Method for a Component
+func supportedMethods() []string {
+	return []string{"git", "helm", "http", "local", ""}
+}
+
 type unmarshalFunction func(in []byte, v interface{}) error
 
 // UnmarshalFile is an unmarshal wrapper which reads in any file from `path` and attempts to
@@ -56,7 +66,7 @@ func UnmarshalFile(path string, unmarshalFunc unmarshalFunction, output interfac
 		return err
 	}
 
-	log.Info(emoji.Sprintf(":floppy_disk: Loading %s", path))
+	logger.Info(emoji.Sprintf(":floppy_disk: Loading %s", path))
 
 	return unmarshalFunc(marshaled, output)
 }
@@ -64,7 +74,7 @@ func UnmarshalFile(path string, unmarshalFunc unmarshalFunction, output interfac
 // UnmarshalComponent finds and unmarshal the component.<format> of a component using the
 // provided `unmarshalFunc` function.
 func (c *Component) UnmarshalComponent(serializationType string, unmarshalFunc unmarshalFunction, component *Component) error {
-	log.Debugf("Attempting to unmarshal %s for component '%s'", serializationType, c.Name)
+	logger.Debug(fmt.Sprintf("Attempting to unmarshal %s for component '%s'", serializationType, c.Name))
 
 	componentFilename := fmt.Sprintf("component.%s", serializationType)
 	componentPath := path.Join(c.PhysicalPath, componentFilename)
@@ -75,19 +85,41 @@ func (c *Component) UnmarshalComponent(serializationType string, unmarshalFunc u
 	return err
 }
 
-func (c *Component) applyDefaultsAndMigrations() {
+func (c *Component) applyDefaultsAndMigrations() error {
 	if len(c.Generator) > 0 {
-		log.Warn(emoji.Sprintf(":boom: DEPRECATION WARNING: Field 'generator' has been deprecated and will be removed in version v1.0.0; Update component '%s' to use 'type' in place of 'generator'", c.Name))
+		logger.Warn(emoji.Sprintf(":boom: DEPRECATION WARNING: Field 'generator' has been deprecated and will be removed in version v1.0.0; Update component '%s' to use 'type' in place of 'generator'", c.Name))
 		c.ComponentType = c.Generator
 	}
 
 	if len(c.Repositories) > 0 {
-		log.Warn(emoji.Sprintf(":boom: DEPRECATION WARNING: Field `repositories` has been deprecrated and will be removed in version v1.0.0; Update component '%s' to use `method: helm`, `source: <helm_repo_url>`, and `path: <chart_name>` and remove `repositories`", c.Name))
+		logger.Warn(emoji.Sprintf(":boom: DEPRECATION WARNING: Field `repositories` has been deprecrated and will be removed in version v1.0.0; Update component '%s' to use `method: helm`, `source: <helm_repo_url>`, and `path: <chart_name>` and remove `repositories`", c.Name))
 	}
 
 	if len(c.ComponentType) == 0 {
 		c.ComponentType = "component"
 	}
+
+	// Helper to see if string value is included in a list of strings
+	includes := func(haystack []string, needle string) bool {
+		for _, value := range haystack {
+			if value == needle {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Ensure component type is valid
+	if !includes(supportedTypes(), c.ComponentType) {
+		return fmt.Errorf("component '%s' specified invalid 'type' of '%s', must be one of: %v", c.Name, c.ComponentType, supportedTypes())
+	}
+
+	// ensure component method is valid
+	if !includes(supportedMethods(), c.Method) {
+		return fmt.Errorf("component '%s' specified invalid 'method' of '%s', must be one of: %v", c.Name, c.Method, supportedMethods())
+	}
+
+	return nil
 }
 
 // LoadComponent loads a component definition in either YAML or JSON formats.
@@ -110,7 +142,9 @@ func (c *Component) LoadComponent() (loadedComponent Component, err error) {
 		}
 	}
 
-	loadedComponent.applyDefaultsAndMigrations()
+	if err = loadedComponent.applyDefaultsAndMigrations(); err != nil {
+		return loadedComponent, err
+	}
 
 	loadedComponent.PhysicalPath = c.PhysicalPath
 	loadedComponent.LogicalPath = c.LogicalPath
@@ -151,18 +185,18 @@ func (c *Component) ExecuteHook(hook string) (err error) {
 	}
 
 	for _, command := range c.Hooks[hook] {
-		log.Info(emoji.Sprintf(":fishing_pole_and_fish: Executing command in hook '%s' for component '%s': %s", hook, c.Name, command))
+		logger.Info(emoji.Sprintf(":fishing_pole_and_fish: Executing command in hook '%s' for component '%s': %s", hook, c.Name, command))
 		if len(command) != 0 {
 			cmd := exec.Command("sh", "-c", command)
 			cmd.Dir = c.PhysicalPath
 			output, err := cmd.CombinedOutput()
 			if err != nil {
-				log.Error(emoji.Sprintf(":no_entry_sign: Error occurred in hook '%s' for component '%s'\n%s: %s", hook, c.Name, err, output))
+				logger.Error(emoji.Sprintf(":no_entry_sign: Error occurred in hook '%s' for component '%s'\n%s: %s", hook, c.Name, err, output))
 				return err
 			}
 			if len(output) > 0 {
 				outstring := emoji.Sprintf(":mag_right: Completed hook '%s' for component '%s':\n%s", hook, c.Name, output)
-				log.Trace(strings.TrimSpace(outstring))
+				logger.Trace(strings.TrimSpace(outstring))
 			}
 		}
 	}
@@ -191,26 +225,80 @@ func (c *Component) afterInstall() (err error) {
 }
 
 // InstallComponent installs the component (if needed) utilizing its Method.
+// This is only used to install 'components', Generators handle the installation
+// of 'non-components' (eg; helm/static)
 func (c *Component) InstallComponent(componentPath string) (err error) {
-	if (c.ComponentType == "component" || len(c.ComponentType) == 0) && c.Method == "git" {
-		componentsPath := path.Join(componentPath, "components")
-		if err := os.MkdirAll(componentsPath, 0777); err != nil {
-			return err
-		}
+	if strings.EqualFold(c.ComponentType, "component") {
+		switch method := strings.ToLower(c.Method); method {
+		case "git":
+			// ensure `components` dir exists
+			componentsPath := path.Join(componentPath, "components")
+			if err := os.MkdirAll(componentsPath, 0777); err != nil {
+				return err
+			}
 
-		subcomponentPath := path.Join(componentPath, c.RelativePathTo())
-		if err = os.RemoveAll(subcomponentPath); err != nil {
-			return err
-		}
+			// delete the subcomponent if previously installed
+			subcomponentPath := path.Join(componentPath, c.RelativePathTo())
+			if err = os.RemoveAll(subcomponentPath); err != nil {
+				return err
+			}
 
-		log.Info(emoji.Sprintf(":helicopter: Installing component '%s' with git from '%s'", c.Name, c.Source))
-
-		if err = CloneRepo(c.Source, c.Version, subcomponentPath, c.Branch); err != nil {
-			return err
+			logger.Info(emoji.Sprintf(":helicopter: Installing component '%s' with git from '%s'", c.Name, c.Source))
+			if err = Git.CloneRepo(c.Source, c.Version, subcomponentPath, c.Branch); err != nil {
+				return err
+			}
+			return nil
+		case "helm":
+			return nil
+		case "http":
+			return nil
+		case "":
+			// default to 'local' if left blank
+			fallthrough
+		case "local":
+			// should already exist in filesystem; ensure it exists
+			subcomponentPath := path.Join(c.PhysicalPath, c.Path)
+			potentialComponentPaths := []string{path.Join(subcomponentPath, "component.yaml"), path.Join(subcomponentPath, "component.json")}
+			componentExists := false
+			for _, componentPath := range potentialComponentPaths {
+				if _, err := os.Stat(componentPath); err == nil {
+					componentExists = true
+					break
+				}
+			}
+			if !componentExists {
+				return fmt.Errorf("unable to stat component.yaml for 'local' component '%s' in path '%s'", c.Name, subcomponentPath)
+			}
+			return nil
+		default:
+			return fmt.Errorf("unsupported method '%s' provided in component '%s'; must be one of %v", c.Method, c.Name, supportedMethods())
 		}
 	}
 
 	return nil
+}
+
+// InstallSingleComponent installs the given component
+func (c *Component) InstallSingleComponent(componentPath string, generator Generator) (err error) {
+	if err := c.beforeInstall(); err != nil {
+		return err
+	}
+
+	if err := c.applyDefaultsAndMigrations(); err != nil {
+        return err
+	}
+
+	if err := c.InstallComponent(componentPath); err != nil {
+		return err
+	}
+
+	if generator != nil {
+		if err := generator.Install(c); err != nil {
+			return err
+		}
+	}
+
+	return c.afterInstall()
 }
 
 // Install encapsulates the install lifecycle of a component including before-install,
@@ -220,13 +308,17 @@ func (c *Component) Install(componentPath string, generator Generator) (err erro
 		return err
 	}
 
+	// Install subcomponents
 	for _, subcomponent := range c.Subcomponents {
-		subcomponent.applyDefaultsAndMigrations()
+		if err = subcomponent.applyDefaultsAndMigrations(); err != nil {
+			return err
+		}
 		if err := subcomponent.InstallComponent(componentPath); err != nil {
 			return err
 		}
 	}
 
+	// Install self
 	if generator != nil {
 		if err := generator.Install(c); err != nil {
 			return err
@@ -259,6 +351,8 @@ func (c *Component) Generate(generator Generator) (err error) {
 
 type componentIteration func(path string, component *Component) (err error)
 
+type rootComponentInit func(startingPath string, environments []string, c Component) (component Component, err error)
+
 // WalkResult is what WalkComponentTree returns.
 // Will contain either a Component OR an Error (Error is nillable; meaning both fields can be nil)
 type WalkResult struct {
@@ -273,7 +367,7 @@ type WalkResult struct {
 //
 // Same level ordering is not ensured; any nodes on the same tree level can be visited in any order.
 // Parent->Child ordering is ensured; A parent is always visited via `iterator` before the children are visited.
-func WalkComponentTree(startingPath string, environments []string, iterator componentIteration) <-chan WalkResult {
+func WalkComponentTree(startingPath string, environments []string, iterator componentIteration, rootInit rootComponentInit) <-chan WalkResult {
 	queue := make(chan Component)    // components enqueued to be 'visited' (ie; walked over)
 	results := make(chan WalkResult) // To pass WalkResults to
 	walking := sync.WaitGroup{}      // Keep track of all nodes being worked on
@@ -281,7 +375,7 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 	// Prepares `component` by loading/de-serializing the component.yaml/json and configs
 	// Note: this is only needed for non-inlined components
 	prepareComponent := func(c Component) Component {
-		log.Debugf("Preparing component '%s'", c.Name)
+		logger.Debug(fmt.Sprintf("Preparing component '%s'", c.Name))
 		// 1. Parse the component at that path into a Component
 		c, err := c.LoadComponent()
 		if err != nil {
@@ -299,7 +393,7 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 	enqueue := func(c Component) {
 		// Increment working counter; MUST happen BEFORE sending to queue or race condition can occur
 		walking.Add(1)
-		log.Debugf("Adding subcomponent '%s' to queue with physical path '%s' and logical path '%s'\n", c.Name, c.PhysicalPath, c.LogicalPath)
+		logger.Debug(fmt.Sprintf("Adding subcomponent '%s' to queue with physical path '%s' and logical path '%s'\n", c.Name, c.PhysicalPath, c.LogicalPath))
 		queue <- c
 	}
 
@@ -312,11 +406,21 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 	// Main worker thread to enqueue root node, wait, and close the channel once all nodes visited
 	go func() {
 		// Manually enqueue the first root component
-		enqueue(prepareComponent(Component{
+
+		rootComponent := prepareComponent(Component{
 			PhysicalPath: startingPath,
 			LogicalPath:  "./",
 			Config:       NewComponentConfig(startingPath),
-		}))
+		})
+
+		// Init rootComponent
+		rootComponent, err := rootInit(startingPath, environments, rootComponent)
+
+		if err != nil {
+			results <- WalkResult{Error: err}
+		} else {
+			enqueue(rootComponent)
+		}
 
 		// Close results channel once all nodes visited
 		walking.Wait()
@@ -341,7 +445,9 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 					// Prep component config
 					subcomponent.Config = c.Config.Subcomponents[subcomponent.Name]
 
-					subcomponent.applyDefaultsAndMigrations()
+					if err = subcomponent.applyDefaultsAndMigrations(); err != nil {
+						results <- WalkResult{Error: err}
+					}
 
 					// Depending if the subcomponent is inlined or not; prepare the component to either load
 					// config/path info from filesystem (non-inlined) or inherit from parent (inlined)
@@ -359,7 +465,7 @@ func WalkComponentTree(startingPath string, environments []string, iterator comp
 						subcomponent.LogicalPath = c.LogicalPath
 					}
 
-					log.Debugf("Adding subcomponent '%s' to queue with physical path '%s' and logical path '%s'\n", subcomponent.Name, subcomponent.PhysicalPath, subcomponent.LogicalPath)
+					logger.Debug(fmt.Sprintf("Adding subcomponent '%s' to queue with physical path '%s' and logical path '%s'\n", subcomponent.Name, subcomponent.PhysicalPath, subcomponent.LogicalPath))
 					enqueue(subcomponent)
 				}
 			}(queuedComponent)
@@ -402,7 +508,7 @@ func (c *Component) Write() (err error) {
 	filename := fmt.Sprintf("component.%s", c.Serialization)
 	componentPath := path.Join(c.PhysicalPath, filename)
 
-	log.Info(emoji.Sprintf(":floppy_disk: Writing '%s'", componentPath))
+	logger.Info(emoji.Sprintf(":floppy_disk: Writing '%s'", componentPath))
 
 	return ioutil.WriteFile(componentPath, marshaledComponent, 0644)
 }
@@ -477,7 +583,7 @@ func (c *Component) GetAccessTokens() (tokens map[string]string, err error) {
 		// If the file is not found, return an empty map with no error
 		return map[string]string{}, nil
 	} else if err != nil {
-		log.Error(emoji.Sprintf(":no_entry_sign: Error unmarshalling access.yaml in '%s'", accessYamlPath))
+		logger.Error(emoji.Sprintf(":no_entry_sign: Error unmarshalling access.yaml in '%s'", accessYamlPath))
 		return nil, err
 	}
 
@@ -487,10 +593,53 @@ func (c *Component) GetAccessTokens() (tokens map[string]string, err error) {
 		if token == "" {
 			// Give warning that failed to load env var; but continue and attempt clone
 			msg := fmt.Sprintf("Component '%s' attempted to load environment variable '%s'; but is either not set or an empty string. Components with source '%s' may fail to install", c.Name, envVar, repo)
-			log.Warn(emoji.Sprintf(":no_entry_sign: %s", msg))
+			logger.Warn(emoji.Sprintf(":no_entry_sign: %s", msg))
 		} else {
 			tokens[repo] = token
 		}
 	}
 	return tokens, err
+}
+
+// InstallRoot installs the root component
+func (c Component) InstallRoot(startingPath string, environments []string) (root Component, err error){
+	logger.Debug(fmt.Sprintf("Install root component'%s'", c.Name))
+
+	if (c.Method != "git") {
+		return c, err
+	}
+
+	// Install the root
+	if err := c.InstallSingleComponent(startingPath, nil); err != nil {
+		return c, err
+	}
+
+	return c.UpdateComponentPath(startingPath, environments)
+}
+
+// UpdateComponentPath updates the component path if it required installing another component
+func (c Component) UpdateComponentPath(startingPath string, environments []string) (root Component, err error) {
+	logger.Debug(fmt.Sprintf("Update component path'%s'", c.Name))
+
+	if (c.Method != "git") {
+		return c, err
+	}
+	
+	if c.ComponentType == "component" || c.ComponentType == "" {
+		relativePath := c.RelativePathTo()
+		c.PhysicalPath = path.Join(relativePath, c.Path)
+		if !filepath.IsAbs(c.RelativePathTo()) {
+			c.PhysicalPath = path.Join(startingPath, c.PhysicalPath)
+		}
+
+		c, err = c.LoadComponent()
+		if err != nil {
+			return c, err
+		}
+	
+		if err = c.LoadConfig(environments); err != nil {
+			return c, err
+		}
+	}
+	return c, err
 }
